@@ -1,5 +1,6 @@
-streamlit==1.58.0
-google-cloud-firestore==2.19.0
-google-api-core==2.34.0
-protobuf==6.33.5
-grpcio==1.68.1
+
+streamlit>=1.30.0
+google-cloud-firestore>=2.14.0
+google-api-core>=2.15.0
+protobuf>=4.25.3,<6.0.0dev
+grpcio>=1.60.0
