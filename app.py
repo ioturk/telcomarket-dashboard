@@ -27,8 +27,8 @@ def get_db():
 
 db = get_db()
 
-# 3. Load Pending Articles
-articles_ref = db.collection("articles").where("status", "==", "pending_review").stream()
+# 3. Load Pending Articles (draft_news collection where approved == False)
+articles_ref = db.collection("draft_news").where("approved", "==", False).stream()
 articles = [doc.to_dict() | {"id": doc.id} for doc in articles_ref]
 
 if not articles:
@@ -42,11 +42,13 @@ for article in articles:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🗑️ Discard", key=f"discard_{article['id']}"):
-                db.collection("articles").document(article["id"]).update({"status": "discarded"})
+                # Set approved to "discarded" so it leaves the pending queue
+                db.collection("draft_news").document(article["id"]).update({"approved": "discarded"})
                 st.rerun()
                 
         with col2:
-            if st.button("🚀 Send to X", key=f"send_{article['id']}"):
-                db.collection("articles").document(article["id"]).update({"status": "published_to_x"})
+            if st.button("🚀 Approve & Send", key=f"send_{article['id']}"):
+                # Mark as approved so your backend publisher picks it up
+                db.collection("draft_news").document(article["id"]).update({"approved": True})
                 st.rerun()
         st.divider()
