@@ -114,7 +114,7 @@ with tab_pending:
                 # Article image preview (if extracted)
                 image_url = article.get("image_url")
                 if image_url:
-                    st.image(image_url, use_column_width=True)
+                    st.image(image_url, use_container_width=True)
 
                 # Editable draft content text area
                 edited_content = st.text_area(
@@ -214,7 +214,7 @@ with tab_posted:
 
                 image_url = article.get("image_url")
                 if image_url:
-                    st.image(image_url, use_column_width=True)
+                    st.image(image_url, use_container_width=True)
 
                 st.code(article.get("draft_content", ""), language="markdown")
                 
