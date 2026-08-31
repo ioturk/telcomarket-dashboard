@@ -2,7 +2,9 @@ import streamlit as st
 import os
 import json
 import tweepy
+from datetime import datetime
 from google.cloud import firestore
+from google.cloud.firestore_v1.query import Query
 from google.oauth2 import service_account
 
 # Page setup
@@ -47,110 +49,195 @@ def publish_to_x(text_content):
     response = client.create_tweet(text=text_content)
     return response.data["id"]
 
-# Navigation Tabs
-tab_pending, tab_posted = st.tabs(["⏳ Pending Review", "✅ Posted to X"])
+# Helper function to format timestamp safely
+def format_timestamp(dt):
+    if not dt:
+        return "Unknown Date"
+    if isinstance(dt, datetime):
+        return dt.strftime("%b %d, %Y • %H:%M UTC")
+    try:
+        return str(dt)
+    except Exception:
+        return "Unknown Date"
 
 # ==========================================
-# TAB 1: PENDING REVIEW (approved == False)
+# DATA FETCHING & SORTING (Newest to Oldest)
+# ==========================================
+pending_ref = db.collection("draft_news")\
+    .where("approved", "==", False)\
+    .order_by("created_at", direction=Query.DESCENDING)\
+    .stream()
+pending_articles = [doc.to_dict() | {"id": doc.id} for doc in pending_ref]
+
+posted_ref = db.collection("draft_news")\
+    .where("posted_to_x", "==", True)\
+    .order_by("created_at", direction=Query.DESCENDING)\
+    .stream()
+posted_articles = [doc.to_dict() | {"id": doc.id} for doc in posted_ref]
+
+# Dynamic Tab Headers with Highlighted Counts
+tab_pending, tab_posted = st.tabs([
+    f"⏳ Pending Review ({len(pending_articles)})",
+    f"✅ Posted to X ({len(posted_articles)})"
+])
+
+ITEMS_PER_PAGE = 25
+
+# ==========================================
+# TAB 1: PENDING REVIEW
 # ==========================================
 with tab_pending:
-    pending_ref = db.collection("draft_news").where("approved", "==", False).stream()
-    pending_articles = [doc.to_dict() | {"id": doc.id} for doc in pending_ref]
-
     if not pending_articles:
         st.info("🎉 No articles currently pending review.")
+    else:
+        # Pagination setup for Pending
+        if "pending_page" not in st.session_state:
+            st.session_state.pending_page = 0
 
-    for article in pending_articles:
-        doc_id = article["id"]
-        with st.container():
-            st.subheader(article.get("title", "No Title"))
-            source_url = article.get("url", "#")
-            st.caption(f"🔗 Source: [{source_url}]({source_url})")
+        total_pending_pages = max(1, (len(pending_articles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+        current_pending_page = st.session_state.pending_page
 
-            # Editable draft content text area
-            edited_content = st.text_area(
-                "Edit Post Draft",
-                value=article.get("draft_content", ""),
-                height=130,
-                key=f"text_{doc_id}"
-            )
+        start_idx = current_pending_page * ITEMS_PER_PAGE
+        end_idx = start_idx + ITEMS_PER_PAGE
+        page_pending_articles = pending_articles[start_idx:end_idx]
 
-            # Character counter
-            char_count = len(edited_content)
-            if char_count > 280:
-                st.warning(f"⚠️ Character count: {char_count}/280 (Exceeds standard limit)")
-            else:
-                st.caption(f"📏 Character count: {char_count}/280")
+        for article in page_pending_articles:
+            doc_id = article["id"]
+            with st.container():
+                st.subheader(article.get("title", "No Title"))
+                
+                # Metadata row: Source link + Timestamp
+                source_url = article.get("url", "#")
+                created_str = format_timestamp(article.get("created_at"))
+                st.caption(f"🔗 [Source Link]({source_url}) | 📅 Added: **{created_str}**")
 
-            # Action Buttons Row
-            col1, col2, col3, col4 = st.columns(4)
+                # Article image preview (if extracted)
+                image_url = article.get("image_url")
+                if image_url:
+                    st.image(image_url, use_column_width=True)
 
-            with col1:
-                # 1. Save Button
-                if st.button("💾 Save", key=f"save_{doc_id}"):
-                    db.collection("draft_news").document(doc_id).update({"draft_content": edited_content})
-                    st.toast("Draft updated successfully!", icon="✅")
+                # Editable draft content text area
+                edited_content = st.text_area(
+                    "Edit Post Draft",
+                    value=article.get("draft_content", ""),
+                    height=130,
+                    key=f"text_{doc_id}"
+                )
 
-            with col2:
-                # 2. Delete Button (removes entry completely from database)
-                if st.button("🗑️ Delete", key=f"delete_{doc_id}"):
-                    db.collection("draft_news").document(doc_id).delete()
-                    st.toast("Entry deleted from database.", icon="🗑️")
-                    st.rerun()
+                # Character counter
+                char_count = len(edited_content)
+                if char_count > 280:
+                    st.warning(f"⚠️ Character count: {char_count}/280 (Exceeds standard limit)")
+                else:
+                    st.caption(f"📏 Character count: {char_count}/280")
 
-            with col3:
-                # 3. Discard Button (reverts approved field to True)
-                if st.button("🚫 Discard", key=f"discard_{doc_id}"):
-                    db.collection("draft_news").document(doc_id).update({
-                        "approved": True,
-                        "status": "discarded"
-                    })
-                    st.toast("Article marked as discarded.", icon="🚫")
-                    st.rerun()
+                # Action Buttons Row
+                col1, col2, col3, col4 = st.columns(4)
 
-            with col4:
-                # 4. Post to X Button
-                if st.button("🚀 Post to X", key=f"post_{doc_id}"):
-                    try:
-                        tweet_id = publish_to_x(edited_content)
+                with col1:
+                    if st.button("💾 Save", key=f"save_{doc_id}"):
+                        db.collection("draft_news").document(doc_id).update({"draft_content": edited_content})
+                        st.toast("Draft updated successfully!", icon="✅")
+
+                with col2:
+                    if st.button("🗑️ Delete", key=f"delete_{doc_id}"):
+                        db.collection("draft_news").document(doc_id).delete()
+                        st.toast("Entry deleted from database.", icon="🗑️")
+                        st.rerun()
+
+                with col3:
+                    if st.button("🚫 Discard", key=f"discard_{doc_id}"):
                         db.collection("draft_news").document(doc_id).update({
                             "approved": True,
-                            "draft_content": edited_content,
-                            "posted_to_x": True,
-                            "tweet_id": tweet_id
+                            "status": "discarded"
                         })
-                        st.success("Successfully posted to X!")
+                        st.toast("Article marked as discarded.", icon="🚫")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to post to X: {e}")
 
-            st.divider()
+                with col4:
+                    if st.button("🚀 Post to X", key=f"post_{doc_id}"):
+                        try:
+                            tweet_id = publish_to_x(edited_content)
+                            db.collection("draft_news").document(doc_id).update({
+                                "approved": True,
+                                "draft_content": edited_content,
+                                "posted_to_x": True,
+                                "tweet_id": tweet_id
+                            })
+                            st.success("Successfully posted to X!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to post to X: {e}")
+
+                st.divider()
+
+        # Pagination Controls
+        if total_pending_pages > 1:
+            p_col1, p_col2, p_col3 = st.columns([1, 2, 1])
+            with p_col1:
+                if st.button("⬅️ Previous", key="prev_pending", disabled=(current_pending_page == 0)):
+                    st.session_state.pending_page -= 1
+                    st.rerun()
+            with p_col2:
+                st.write(f"Page {current_pending_page + 1} of {total_pending_pages}")
+            with p_col3:
+                if st.button("Next ➡️", key="next_pending", disabled=(current_pending_page >= total_pending_pages - 1)):
+                    st.session_state.pending_page += 1
+                    st.rerun()
 
 # ==========================================
-# TAB 2: POSTED TO X (posted_to_x == True)
+# TAB 2: POSTED TO X
 # ==========================================
 with tab_posted:
-    posted_ref = db.collection("draft_news").where("posted_to_x", "==", True).stream()
-    posted_articles = [doc.to_dict() | {"id": doc.id} for doc in posted_ref]
-
     if not posted_articles:
         st.info("No articles posted to X yet.")
+    else:
+        # Pagination setup for Posted
+        if "posted_page" not in st.session_state:
+            st.session_state.posted_page = 0
 
-    for article in posted_articles:
-        doc_id = article["id"]
-        with st.container():
-            st.subheader(article.get("title", "No Title"))
-            source_url = article.get("url", "#")
-            st.caption(f"🔗 Source: [{source_url}]({source_url})")
+        total_posted_pages = max(1, (len(posted_articles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+        current_posted_page = st.session_state.posted_page
 
-            st.code(article.get("draft_content", ""), language="markdown")
-            
-            tweet_id = article.get("tweet_id")
-            if tweet_id:
-                st.caption(f"📱 Tweet ID: `{tweet_id}`")
+        p_start_idx = current_posted_page * ITEMS_PER_PAGE
+        p_end_idx = p_start_idx + ITEMS_PER_PAGE
+        page_posted_articles = posted_articles[p_start_idx:p_end_idx]
 
-            if st.button("🗑️ Delete Record", key=f"del_posted_{doc_id}"):
-                db.collection("draft_news").document(doc_id).delete()
-                st.rerun()
+        for article in page_posted_articles:
+            doc_id = article["id"]
+            with st.container():
+                st.subheader(article.get("title", "No Title"))
+                
+                source_url = article.get("url", "#")
+                created_str = format_timestamp(article.get("created_at"))
+                st.caption(f"🔗 [Source Link]({source_url}) | 📅 Posted Entry Date: **{created_str}**")
 
-            st.divider()
+                image_url = article.get("image_url")
+                if image_url:
+                    st.image(image_url, use_column_width=True)
+
+                st.code(article.get("draft_content", ""), language="markdown")
+                
+                tweet_id = article.get("tweet_id")
+                if tweet_id:
+                    st.caption(f"📱 Tweet ID: `{tweet_id}`")
+
+                if st.button("🗑️ Delete Record", key=f"del_posted_{doc_id}"):
+                    db.collection("draft_news").document(doc_id).delete()
+                    st.rerun()
+
+                st.divider()
+
+        # Pagination Controls
+        if total_posted_pages > 1:
+            p_col1, p_col2, p_col3 = st.columns([1, 2, 1])
+            with p_col1:
+                if st.button("⬅️ Previous", key="prev_posted", disabled=(current_posted_page == 0)):
+                    st.session_state.posted_page -= 1
+                    st.rerun()
+            with p_col2:
+                st.write(f"Page {current_posted_page + 1} of {total_posted_pages}")
+            with p_col3:
+                if st.button("Next ➡️", key="next_posted", disabled=(current_posted_page >= total_posted_pages - 1)):
+                    st.session_state.posted_page += 1
+                    st.rerun()
