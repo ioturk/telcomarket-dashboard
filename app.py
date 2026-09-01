@@ -10,7 +10,34 @@ from google.oauth2 import service_account
 # Page setup
 st.set_page_config(page_title="Telco Market Admin", layout="centered", initial_sidebar_state="collapsed")
 
-# 1. Simple Password Protection
+# 1. Custom CSS for Contrast, Pagination & iPhone/Mobile Alignment
+st.markdown("""
+<style>
+/* High-contrast pagination buttons */
+div[data-testid="stHorizontalBlock"] button {
+    padding: 0.25rem 0.4rem !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+}
+
+div[data-testid="stHorizontalBlock"] button[kind="primary"] {
+    color: #FFFFFF !important;
+    background-color: #FF4B4B !important;
+    border-color: #FF4B4B !important;
+}
+
+/* Action button scaling for mobile viewports (e.g. iPhone 17 Pro) */
+div[data-testid="column"] button {
+    width: 100% !important;
+    font-size: 0.85rem !important;
+    padding-left: 0.2rem !important;
+    padding-right: 0.2rem !important;
+    white-space: nowrap !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# 2. Simple Password Protection
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "default_secret")
 user_pass = st.text_input("Enter Admin Password", type="password")
 
@@ -21,7 +48,7 @@ if user_pass != ADMIN_PASSWORD:
 
 st.title("📲 Telco Market Admin")
 
-# 2. Firestore Initialization
+# 3. Firestore Initialization
 @st.cache_resource
 def get_db():
     service_account_info = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
@@ -60,15 +87,28 @@ def format_timestamp(dt):
     except Exception:
         return "Unknown Date"
 
-# Helper function for rendering numbered pagination controls
+# Helper function for high-contrast, responsive pagination controls
 def render_pagination_controls(current_page, total_pages, state_key):
     if total_pages <= 1:
         return
 
     st.write("")
-    # Build column widths: Prev button, numbered buttons, Next button
-    col_widths = [1] + [1] * total_pages + [1]
-    cols = st.columns(col_widths)
+    
+    # Visible numbered buttons limit for mobile alignment
+    max_visible_buttons = 5
+    half_range = max_visible_buttons // 2
+
+    start_page = max(0, current_page - half_range)
+    end_page = min(total_pages, start_page + max_visible_buttons)
+
+    if end_page - start_page < max_visible_buttons:
+        start_page = max(0, end_page - max_visible_buttons)
+
+    page_numbers = list(range(start_page, end_page))
+    
+    # Layout structure: Prev + Page Numbers + Next
+    num_cols = 1 + len(page_numbers) + 1
+    cols = st.columns(num_cols)
 
     # 1. Previous Button
     with cols[0]:
@@ -76,15 +116,16 @@ def render_pagination_controls(current_page, total_pages, state_key):
             st.session_state[state_key] -= 1
             st.rerun()
 
-    # 2. Page Number Buttons (1, 2, 3, 4...)
-    for i in range(total_pages):
-        with cols[i + 1]:
-            is_current = (i == current_page)
-            # Active page is highlighted with a primary-style label indicator
-            btn_label = f"[{i + 1}]" if is_current else f"{i + 1}"
-            if st.button(btn_label, key=f"page_{state_key}_{i}", disabled=is_current):
-                st.session_state[state_key] = i
-                st.rerun()
+    # 2. Page Number Buttons
+    for idx, page_num in enumerate(page_numbers):
+        with cols[idx + 1]:
+            is_current = (page_num == current_page)
+            btn_type = "primary" if is_current else "secondary"
+            
+            if st.button(f"{page_num + 1}", key=f"page_{state_key}_{page_num}", type=btn_type):
+                if not is_current:
+                    st.session_state[state_key] = page_num
+                    st.rerun()
 
     # 3. Next Button
     with cols[-1]:
@@ -107,10 +148,10 @@ posted_ref = db.collection("draft_news")\
     .stream()
 posted_articles = [doc.to_dict() | {"id": doc.id} for doc in posted_ref]
 
-# Dynamic Tab Headers with Highlighted Counts
+# Dynamic Tab Headers
 tab_pending, tab_posted = st.tabs([
-    f"⏳ Pending Review ({len(pending_articles)})",
-    f"✅ Posted to X ({len(posted_articles)})"
+    f"⏳ Pending ({len(pending_articles)})",
+    f"✅ Posted ({len(posted_articles)})"
 ])
 
 ITEMS_PER_PAGE = 20
@@ -122,13 +163,11 @@ with tab_pending:
     if not pending_articles:
         st.info("🎉 No articles currently pending review.")
     else:
-        # Session state initialization for Pending tab
         if "pending_page" not in st.session_state:
             st.session_state.pending_page = 0
 
         total_pending_pages = max(1, (len(pending_articles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
         
-        # Guard against index overflow after document deletions
         if st.session_state.pending_page >= total_pending_pages:
             st.session_state.pending_page = total_pending_pages - 1
 
@@ -143,17 +182,14 @@ with tab_pending:
             with st.container():
                 st.subheader(article.get("title", "No Title"))
                 
-                # Metadata row: Source link + Timestamp
                 source_url = article.get("url", "#")
                 created_str = format_timestamp(article.get("created_at"))
                 st.caption(f"🔗 [Source Link]({source_url}) | 📅 Added: **{created_str}**")
 
-                # Article image preview (if extracted)
                 image_url = article.get("image_url")
                 if image_url:
                     st.image(image_url, use_container_width=True)
 
-                # Editable draft content text area
                 edited_content = st.text_area(
                     "Edit Post Draft",
                     value=article.get("draft_content", ""),
@@ -161,38 +197,21 @@ with tab_pending:
                     key=f"text_{doc_id}"
                 )
 
-                # Character counter
                 char_count = len(edited_content)
                 if char_count > 280:
-                    st.warning(f"⚠️ Character count: {char_count}/280 (Exceeds standard limit)")
+                    st.warning(f"⚠️ Character count: {char_count}/280")
                 else:
                     st.caption(f"📏 Character count: {char_count}/280")
 
-                # Action Buttons Row
-                col1, col2, col3, col4 = st.columns(4)
-
-                with col1:
+                # Mobile-Optimized 2x2 Grid Layout for Action Buttons
+                row1_col1, row1_col2 = st.columns(2)
+                with row1_col1:
                     if st.button("💾 Save", key=f"save_{doc_id}"):
                         db.collection("draft_news").document(doc_id).update({"draft_content": edited_content})
-                        st.toast("Draft updated successfully!", icon="✅")
+                        st.toast("Draft updated!", icon="✅")
 
-                with col2:
-                    if st.button("🗑️ Delete", key=f"delete_{doc_id}"):
-                        db.collection("draft_news").document(doc_id).delete()
-                        st.toast("Entry deleted from database.", icon="🗑️")
-                        st.rerun()
-
-                with col3:
-                    if st.button("🚫 Discard", key=f"discard_{doc_id}"):
-                        db.collection("draft_news").document(doc_id).update({
-                            "approved": True,
-                            "status": "discarded"
-                        })
-                        st.toast("Article marked as discarded.", icon="🚫")
-                        st.rerun()
-
-                with col4:
-                    if st.button("🚀 Post to X", key=f"post_{doc_id}"):
+                with row1_col2:
+                    if st.button("🚀 Post to X", key=f"post_{doc_id}", type="primary"):
                         try:
                             tweet_id = publish_to_x(edited_content)
                             db.collection("draft_news").document(doc_id).update({
@@ -201,14 +220,29 @@ with tab_pending:
                                 "posted_to_x": True,
                                 "tweet_id": tweet_id
                             })
-                            st.success("Successfully posted to X!")
+                            st.success("Posted to X!")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Failed to post to X: {e}")
+                            st.error(f"Failed to post: {e}")
+
+                row2_col1, row2_col2 = st.columns(2)
+                with row2_col1:
+                    if st.button("🚫 Discard", key=f"discard_{doc_id}"):
+                        db.collection("draft_news").document(doc_id).update({
+                            "approved": True,
+                            "status": "discarded"
+                        })
+                        st.toast("Marked as discarded.", icon="🚫")
+                        st.rerun()
+
+                with row2_col2:
+                    if st.button("🗑️ Delete", key=f"delete_{doc_id}"):
+                        db.collection("draft_news").document(doc_id).delete()
+                        st.toast("Entry deleted.", icon="🗑️")
+                        st.rerun()
 
                 st.divider()
 
-        # Render Numbered Pagination Controls for Pending Tab
         render_pagination_controls(current_pending_page, total_pending_pages, "pending_page")
 
 # ==========================================
@@ -218,13 +252,11 @@ with tab_posted:
     if not posted_articles:
         st.info("No articles posted to X yet.")
     else:
-        # Session state initialization for Posted tab
         if "posted_page" not in st.session_state:
             st.session_state.posted_page = 0
 
         total_posted_pages = max(1, (len(posted_articles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
         
-        # Guard against index overflow after document deletions
         if st.session_state.posted_page >= total_posted_pages:
             st.session_state.posted_page = total_posted_pages - 1
 
@@ -241,7 +273,7 @@ with tab_posted:
                 
                 source_url = article.get("url", "#")
                 created_str = format_timestamp(article.get("created_at"))
-                st.caption(f"🔗 [Source Link]({source_url}) | 📅 Posted Entry Date: **{created_str}**")
+                st.caption(f"🔗 [Source Link]({source_url}) | 📅 Date: **{created_str}**")
 
                 image_url = article.get("image_url")
                 if image_url:
@@ -259,5 +291,4 @@ with tab_posted:
 
                 st.divider()
 
-        # Render Numbered Pagination Controls for Posted Tab
         render_pagination_controls(current_posted_page, total_posted_pages, "posted_page")
