@@ -60,6 +60,38 @@ def format_timestamp(dt):
     except Exception:
         return "Unknown Date"
 
+# Helper function for rendering numbered pagination controls
+def render_pagination_controls(current_page, total_pages, state_key):
+    if total_pages <= 1:
+        return
+
+    st.write("")
+    # Build column widths: Prev button, numbered buttons, Next button
+    col_widths = [1] + [1] * total_pages + [1]
+    cols = st.columns(col_widths)
+
+    # 1. Previous Button
+    with cols[0]:
+        if st.button("⬅️", key=f"prev_{state_key}", disabled=(current_page == 0)):
+            st.session_state[state_key] -= 1
+            st.rerun()
+
+    # 2. Page Number Buttons (1, 2, 3, 4...)
+    for i in range(total_pages):
+        with cols[i + 1]:
+            is_current = (i == current_page)
+            # Active page is highlighted with a primary-style label indicator
+            btn_label = f"[{i + 1}]" if is_current else f"{i + 1}"
+            if st.button(btn_label, key=f"page_{state_key}_{i}", disabled=is_current):
+                st.session_state[state_key] = i
+                st.rerun()
+
+    # 3. Next Button
+    with cols[-1]:
+        if st.button("➡️", key=f"next_{state_key}", disabled=(current_page >= total_pages - 1)):
+            st.session_state[state_key] += 1
+            st.rerun()
+
 # ==========================================
 # DATA FETCHING & SORTING (Newest to Oldest)
 # ==========================================
@@ -81,7 +113,7 @@ tab_pending, tab_posted = st.tabs([
     f"✅ Posted to X ({len(posted_articles)})"
 ])
 
-ITEMS_PER_PAGE = 25
+ITEMS_PER_PAGE = 20
 
 # ==========================================
 # TAB 1: PENDING REVIEW
@@ -90,11 +122,16 @@ with tab_pending:
     if not pending_articles:
         st.info("🎉 No articles currently pending review.")
     else:
-        # Pagination setup for Pending
+        # Session state initialization for Pending tab
         if "pending_page" not in st.session_state:
             st.session_state.pending_page = 0
 
         total_pending_pages = max(1, (len(pending_articles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+        
+        # Guard against index overflow after document deletions
+        if st.session_state.pending_page >= total_pending_pages:
+            st.session_state.pending_page = total_pending_pages - 1
+
         current_pending_page = st.session_state.pending_page
 
         start_idx = current_pending_page * ITEMS_PER_PAGE
@@ -171,19 +208,8 @@ with tab_pending:
 
                 st.divider()
 
-        # Pagination Controls
-        if total_pending_pages > 1:
-            p_col1, p_col2, p_col3 = st.columns([1, 2, 1])
-            with p_col1:
-                if st.button("⬅️ Previous", key="prev_pending", disabled=(current_pending_page == 0)):
-                    st.session_state.pending_page -= 1
-                    st.rerun()
-            with p_col2:
-                st.write(f"Page {current_pending_page + 1} of {total_pending_pages}")
-            with p_col3:
-                if st.button("Next ➡️", key="next_pending", disabled=(current_pending_page >= total_pending_pages - 1)):
-                    st.session_state.pending_page += 1
-                    st.rerun()
+        # Render Numbered Pagination Controls for Pending Tab
+        render_pagination_controls(current_pending_page, total_pending_pages, "pending_page")
 
 # ==========================================
 # TAB 2: POSTED TO X
@@ -192,11 +218,16 @@ with tab_posted:
     if not posted_articles:
         st.info("No articles posted to X yet.")
     else:
-        # Pagination setup for Posted
+        # Session state initialization for Posted tab
         if "posted_page" not in st.session_state:
             st.session_state.posted_page = 0
 
         total_posted_pages = max(1, (len(posted_articles) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+        
+        # Guard against index overflow after document deletions
+        if st.session_state.posted_page >= total_posted_pages:
+            st.session_state.posted_page = total_posted_pages - 1
+
         current_posted_page = st.session_state.posted_page
 
         p_start_idx = current_posted_page * ITEMS_PER_PAGE
@@ -228,16 +259,5 @@ with tab_posted:
 
                 st.divider()
 
-        # Pagination Controls
-        if total_posted_pages > 1:
-            p_col1, p_col2, p_col3 = st.columns([1, 2, 1])
-            with p_col1:
-                if st.button("⬅️ Previous", key="prev_posted", disabled=(current_posted_page == 0)):
-                    st.session_state.posted_page -= 1
-                    st.rerun()
-            with p_col2:
-                st.write(f"Page {current_posted_page + 1} of {total_posted_pages}")
-            with p_col3:
-                if st.button("Next ➡️", key="next_posted", disabled=(current_posted_page >= total_posted_pages - 1)):
-                    st.session_state.posted_page += 1
-                    st.rerun()
+        # Render Numbered Pagination Controls for Posted Tab
+        render_pagination_controls(current_posted_page, total_posted_pages, "posted_page")
